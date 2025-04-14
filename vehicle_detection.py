@@ -166,7 +166,8 @@ class VehicleDetector:
 
 def process_video(input_source, output_path=None, model_path=None, confidence=0.3, 
                   device="cpu", display=True, downsample_factor=1, 
-                  roi_x1=20, roi_y1=20, roi_x2=80, roi_y2=80):
+                  roi_x1=20, roi_y1=20, roi_x2=80, roi_y2=80,
+                  process_interval_seconds=0.0):
     """
     Process a video file or camera stream for vehicle detection and counting within an ROI.
     
@@ -179,6 +180,7 @@ def process_video(input_source, output_path=None, model_path=None, confidence=0.
         display: Whether to display the output video
         downsample_factor: Factor to downsample the frame before processing (e.g., 2 means half width/height)
         roi_x1, roi_y1, roi_x2, roi_y2: ROI corner coordinates as percentages (0-100).
+        process_interval_seconds: Process one frame every N seconds (0.0 means process every frame)
     """
     # Input validation
     if not isinstance(downsample_factor, int) or downsample_factor < 1:
@@ -187,6 +189,9 @@ def process_video(input_source, output_path=None, model_path=None, confidence=0.
     if not (0 <= roi_x1 < roi_x2 <= 100 and 0 <= roi_y1 < roi_y2 <= 100):
         print("Error: Invalid ROI percentage values (must be 0-100, x1<x2, y1<y2). Check arguments.")
         return
+    if process_interval_seconds < 0:
+        print("Warning: Invalid process_interval_seconds. Using 0.0 (process every frame).")
+        process_interval_seconds = 0.0
 
     # Initialize the detector, passing the ROI percentages
     detector = VehicleDetector(model_path, confidence, device, roi_x1, roi_y1, roi_x2, roi_y2)
@@ -199,8 +204,13 @@ def process_video(input_source, output_path=None, model_path=None, confidence=0.
     original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps_video = cap.get(cv2.CAP_PROP_FPS) 
+    
     print(f"Original frame size: {original_width}x{original_height}")
+    print(f"Original FPS: {fps_video:.2f}")
     if downsample_factor > 1: print(f"Downsampling factor: {downsample_factor}")
+    if process_interval_seconds > 0: 
+        print(f"Processing one frame every {process_interval_seconds} seconds")
+        print(f"Expected compute savings: {1.0 - (1.0 / (fps_video * process_interval_seconds)):.1%}")
         
     writer = None
     if output_path:
@@ -210,9 +220,21 @@ def process_video(input_source, output_path=None, model_path=None, confidence=0.
     
     frame_count = 0
     total_fps = 0
+    last_process_time = 0
     
     try:
         while True:
+            current_time = time.time()
+            
+            # Skip frames based on process_interval_seconds
+            if process_interval_seconds > 0 and (current_time - last_process_time) < process_interval_seconds:
+                # Skip reading the frame entirely to save compute power
+                cap.grab()  # This is much faster than cap.read()
+                continue
+            
+            last_process_time = current_time
+            
+            # Read and process the frame
             ret, original_frame = cap.read()
             if not ret: break
             
@@ -282,6 +304,7 @@ def main():
     parser.add_argument("--device", default="cpu", help="Device (cpu, cuda, mps) (default: cpu)")
     parser.add_argument("--no-display", action="store_true", help="Don't display video")
     parser.add_argument("--downsample-factor", type=int, default=1, help="Downsample factor (default: 1)")
+    parser.add_argument("--process-interval", type=float, default=0.0, help="Process one frame every N seconds (default: 0.0, process every frame)")
     
     # --- ROI Arguments ---
     parser.add_argument("--roi-x1", type=float, default=20.0, help="ROI top-left X (% width, 0-100, default: 20)")
@@ -296,7 +319,8 @@ def main():
         input_source=args.source, output_path=args.output, model_path=args.model,
         confidence=args.confidence, device=args.device, display=not args.no_display,
         downsample_factor=args.downsample_factor,
-        roi_x1=args.roi_x1, roi_y1=args.roi_y1, roi_x2=args.roi_x2, roi_y2=args.roi_y2
+        roi_x1=args.roi_x1, roi_y1=args.roi_y1, roi_x2=args.roi_x2, roi_y2=args.roi_y2,
+        process_interval_seconds=args.process_interval
     )
 
 if __name__ == "__main__":
